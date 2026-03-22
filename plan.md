@@ -54,7 +54,7 @@ Draft data model (Step 2 complete)
 - Table: qr_codes
   - id (UUID, PK)
   - qr_token (string, UNIQUE, indexed)
-  - url (string, not null, max 20 ASCII chars per requirement)
+  - url (string, not null, max 2048 ASCII chars per requirement)
   - status (enum: active, deleted)
   - created_at, updated_at
   - last_clicked_at (timestamp, for cleanup)

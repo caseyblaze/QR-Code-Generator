@@ -3,8 +3,8 @@ from urllib.parse import urlparse
 
 
 def validate_url(value: str) -> str:
-    if len(value) > 20:
-        raise ValueError("url must be at most 20 characters")
+    if len(value) > 2048:
+        raise ValueError("url must be at most 2048 characters")
     try:
         value.encode("ascii")
     except UnicodeEncodeError as exc:

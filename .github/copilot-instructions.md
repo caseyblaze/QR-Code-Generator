@@ -16,7 +16,7 @@ Project: QR-Code-Generator
 - Cleanup is handled by `scripts/cleanup.py`, which marks inactive QR codes as deleted.
 
 ## Key conventions
-- Input URLs must be ASCII and <= 20 characters.
+- Input URLs must be ASCII and <= 2048 characters.
 - Tokens are 10-char Base62 derived from SHA-256(url + nonce + secret); collisions retry on UNIQUE constraint.
 - Image specs are normalized and hashed; identical specs reuse the same stored image.
 - Environment configuration is centralized in `app/settings.py`.

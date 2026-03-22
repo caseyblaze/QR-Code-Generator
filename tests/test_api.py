@@ -102,7 +102,6 @@ def test_qr_image_generation(client):
 
 def test_invalid_url_length(client):
     test_client, _, _ = client
-    response = test_client.post(
-        "/v1/qr_code", json={"url": "https://1234567890123.com"}
-    )
+    long_url = "https://example.com/" + ("a" * 2048)
+    response = test_client.post("/v1/qr_code", json={"url": long_url})
     assert response.status_code == 422
