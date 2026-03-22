@@ -31,6 +31,39 @@ python3 -m pytest
 - `DEFAULT_BORDER` (default: `4`)
 - `MAX_DIMENSION` (default: `1024`)
 
+## Deploy to GCP (Cloud Run + Cloud Storage)
+
+This repository currently uses SQLite and local disk storage. For Cloud Run, use a
+managed database for metadata (for example Firestore) and Cloud Storage for images.
+If you add adapters for Firestore + GCS, document these environment variables:
+
+- `GCP_PROJECT_ID`
+- `GCP_BUCKET_NAME`
+- `GOOGLE_APPLICATION_CREDENTIALS` (optional locally; use Workload Identity on Cloud Run)
+- `CDN_BASE_URL` (use the GCS public URL or a CDN in front of the bucket)
+- `PUBLIC_BASE_URL` (your Cloud Run service URL)
+
+Minimal Cloud Run deploy flow:
+
+```bash
+gcloud init
+gcloud config set project YOUR_PROJECT_ID
+
+gcloud services enable run.googleapis.com storage.googleapis.com firestore.googleapis.com
+
+gsutil mb -l asia-east1 gs://YOUR_BUCKET_NAME
+
+gcloud run deploy qr-generator \
+  --source . \
+  --platform managed \
+  --region asia-east1 \
+  --allow-unauthenticated \
+  --set-env-vars="GCP_PROJECT_ID=YOUR_PROJECT_ID,GCP_BUCKET_NAME=YOUR_BUCKET_NAME"
+```
+
+If you want public image URLs, make the bucket or a prefix public. For private
+images, use signed URLs.
+
 ## API
 
 Create a QR code:
