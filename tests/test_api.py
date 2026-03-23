@@ -1,5 +1,4 @@
 import importlib
-import os
 
 import pytest
 from fastapi.testclient import TestClient
@@ -7,18 +6,18 @@ from fastapi.testclient import TestClient
 from app.storage import image_path, normalize_spec, spec_hash
 
 
-def build_client(tmp_path):
+def build_client(tmp_path, monkeypatch):
     storage_path = tmp_path / "storage"
     storage_path.mkdir(parents=True, exist_ok=True)
 
-    os.environ["DB_PATH"] = str(tmp_path / "data" / "qr.db")
-    os.environ["STORAGE_PATH"] = str(storage_path)
-    os.environ["CDN_BASE_URL"] = "http://cdn.test"
-    os.environ["PUBLIC_BASE_URL"] = "http://testserver"
-    os.environ["TOKEN_SECRET"] = "test-secret"
-    os.environ["TOKEN_LENGTH"] = "8"
-    os.environ["CACHE_TTL_SECONDS"] = "60"
-    os.environ["RETENTION_DAYS"] = "7"
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "data" / "qr.db"))
+    monkeypatch.setenv("STORAGE_PATH", str(storage_path))
+    monkeypatch.setenv("CDN_BASE_URL", "http://cdn.test")
+    monkeypatch.setenv("PUBLIC_BASE_URL", "http://testserver")
+    monkeypatch.setenv("TOKEN_SECRET", "test-secret")
+    monkeypatch.setenv("TOKEN_LENGTH", "8")
+    monkeypatch.setenv("CACHE_TTL_SECONDS", "60")
+    monkeypatch.setenv("RETENTION_DAYS", "7")
 
     import app.settings as settings
     import app.db as db
@@ -32,8 +31,8 @@ def build_client(tmp_path):
 
 
 @pytest.fixture()
-def client(tmp_path):
-    test_client, settings, main = build_client(tmp_path)
+def client(tmp_path, monkeypatch):
+    test_client, settings, main = build_client(tmp_path, monkeypatch)
     with test_client:
         yield test_client, settings, main
 

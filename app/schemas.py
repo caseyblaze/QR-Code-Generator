@@ -1,3 +1,5 @@
+import re
+
 from pydantic import BaseModel, Field, field_validator
 from urllib.parse import urlparse
 
@@ -46,3 +48,10 @@ class ImageSpec(BaseModel):
     dimension: int = Field(default=256, ge=64)
     color: str = Field(default="#000000", min_length=1, max_length=32)
     border: int = Field(default=4, ge=0, le=16)
+
+    @field_validator("color")
+    @classmethod
+    def validate_color(cls, value: str) -> str:
+        if not re.fullmatch(r"#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})", value):
+            raise ValueError("color must be a hex value like #rrggbb or #rgb")
+        return value
