@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, Response
+from fastapi.exceptions import RequestValidationError
+from pydantic import ValidationError
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -25,7 +27,6 @@ from .tokens import generate_token
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_db()
-    SETTINGS.storage_path.mkdir(parents=True, exist_ok=True)
     yield
 
 
@@ -61,11 +62,16 @@ def resolve_image_spec(
     if image_spec is not None:
         spec = image_spec
     else:
-        spec = ImageSpec(
-            dimension=dimension if dimension is not None else SETTINGS.default_dimension,
-            color=color if color is not None else SETTINGS.default_color,
-            border=border if border is not None else SETTINGS.default_border,
-        )
+        try:
+            spec = ImageSpec(
+                dimension=dimension
+                if dimension is not None
+                else SETTINGS.default_dimension,
+                color=color if color is not None else SETTINGS.default_color,
+                border=border if border is not None else SETTINGS.default_border,
+            )
+        except ValidationError as exc:
+            raise RequestValidationError(exc.errors()) from exc
 
     if spec.dimension > SETTINGS.max_dimension:
         raise HTTPException(
@@ -119,7 +125,12 @@ def get_qr_code_image(
 
     if not path.exists():
         redirect_url = f"{SETTINGS.public_base_url.rstrip('/')}/{qr_token}"
-        image = generate_qr_png(redirect_url, spec.dimension, spec.color, spec.border)
+        try:
+            image = generate_qr_png(
+                redirect_url, spec.dimension, spec.color, spec.border
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         store_image(image, path)
 
     return {"image_location": build_cdn_url(SETTINGS.cdn_base_url, qr_token, hash_value)}
