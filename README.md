@@ -22,6 +22,7 @@ python3 -m pytest
 - `DB_PATH` (default: `data/qr_codes.db`)
 - `STORAGE_PATH` (default: `storage`)
 - `CDN_BASE_URL` (default: `http://localhost:8000/static`)
+  Note: In Cloud Run or production, set this to a publicly accessible image base URL (for example, `https://YOUR_SERVICE_URL/static` or a CDN/GCS public URL). Otherwise `v1/qr_code_image/{qr_token}` may return `localhost` links.
 - `PUBLIC_BASE_URL` (default: `http://localhost:8000`)
 - `TOKEN_SECRET` (default: `dev-secret`)
 - `RETENTION_DAYS` (default: `7`)
