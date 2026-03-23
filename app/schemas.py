@@ -53,5 +53,5 @@ class ImageSpec(BaseModel):
     @classmethod
     def validate_color(cls, value: str) -> str:
         if not re.fullmatch(r"#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})", value):
-            raise ValueError("color must be a hex value like #RRGGBB or #RGB")
+            raise ValueError("color must be a hex value like #rrggbb or #rgb")
         return value

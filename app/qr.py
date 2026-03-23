@@ -14,7 +14,7 @@ def generate_qr_png(data: str, dimension: int, color: str, border: int) -> Image
     try:
         image = qr.make_image(fill_color=color, back_color="white").convert("RGB")
     except ValueError as exc:
-        raise ValueError("color must be a hex value like #RRGGBB or #RGB") from exc
+        raise ValueError("color must be a hex value like #rrggbb or #rgb") from exc
     if dimension:
         image = image.resize((dimension, dimension), Image.NEAREST)
     return image
