@@ -1,0 +1,5 @@
+# Google Buildpacks configuration
+
+[[build.env]]
+name = "GOOGLE_RUNTIME_VERSION"
+value = "3.11"
