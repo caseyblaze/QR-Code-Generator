@@ -100,6 +100,20 @@ def test_qr_image_generation(client):
     assert path.exists()
 
 
+def test_qr_image_raw_response(client):
+    test_client, _, _ = client
+    response = test_client.post("/v1/qr_code", json={"url": "https://ex.com"})
+    qr_token = response.json()["qr_token"]
+
+    image_response = test_client.get(
+        f"/v1/qr_code_image/{qr_token}",
+        params={"dimension": 128, "color": "#000000", "border": 2, "raw": "true"},
+    )
+    assert image_response.status_code == 200
+    assert image_response.headers["content-type"].startswith("image/png")
+    assert image_response.content
+
+
 def test_invalid_url_length(client):
     test_client, _, _ = client
     long_url = "https://example.com/" + ("a" * 2048)
