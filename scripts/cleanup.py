@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from app.db import db_connection, init_db
+from app.db import db_connection, db_execute, init_db
 from app.settings import SETTINGS
 
 
@@ -11,7 +11,8 @@ def main() -> None:
     now_iso = datetime.now(timezone.utc).isoformat()
 
     with db_connection() as conn:
-        cursor = conn.execute(
+        cursor = db_execute(
+            conn,
             """
             UPDATE qr_codes
             SET status = 'deleted', deleted_at = ?, updated_at = ?

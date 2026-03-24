@@ -10,6 +10,7 @@ def build_client(tmp_path, monkeypatch):
     storage_path = tmp_path / "storage"
     storage_path.mkdir(parents=True, exist_ok=True)
 
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.setenv("DB_PATH", str(tmp_path / "data" / "qr.db"))
     monkeypatch.setenv("STORAGE_PATH", str(storage_path))
     monkeypatch.setenv("CDN_BASE_URL", "http://cdn.test")
