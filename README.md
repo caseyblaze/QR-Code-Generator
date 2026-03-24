@@ -34,8 +34,13 @@ python3 -m pytest
     `mysql+pymysql://USER:PASSWORD@127.0.0.1:3306/DB_NAME`
 - `DB_PATH` (default: `data/qr_codes.db`)
 - `STORAGE_PATH` (default: `storage`)
+- `GCP_BUCKET_NAME` (optional; when set, uploads QR images to this bucket)
 - `CDN_BASE_URL` (default: `http://localhost:8000/static`)
-  Note: In Cloud Run or production, set this to a publicly accessible image base URL (for example, `https://YOUR_SERVICE_URL/static` or a CDN/GCS public URL). Otherwise `v1/qr_code_image/{qr_token}` may return `localhost` links.
+  Note: If `GCP_BUCKET_NAME` is set and `CDN_BASE_URL` is not, it defaults to
+  `https://storage.googleapis.com/<bucket>`. In Cloud Run or production, set this
+  to a publicly accessible image base URL (for example, `https://YOUR_SERVICE_URL/static`
+  or a CDN/GCS public URL). Otherwise `v1/qr_code_image/{qr_token}` may return
+  `localhost` links.
 - `PUBLIC_BASE_URL` (default: `http://localhost:8000`)
 - `TOKEN_SECRET` (default: `dev-secret`)
 - `RETENTION_DAYS` (default: `7`)
@@ -47,11 +52,12 @@ python3 -m pytest
 
 ## Deploy to GCP (Cloud Run + Cloud Storage)
 
-This repository currently uses SQLite and local disk storage. For Cloud Run, use a
+This repository uses SQLite and local disk storage by default. For Cloud Run, use a
 managed database for metadata (for example Firestore) and Cloud Storage for images.
-If you add adapters for Firestore + GCS, document these environment variables:
+When `GCP_BUCKET_NAME` is set, images are uploaded to the bucket and `image_location`
+returns the CDN/GCS URL.
 
-- `GCP_PROJECT_ID`
+- `GCP_PROJECT_ID` (used for GCS client project selection if provided)
 - `GCP_BUCKET_NAME`
 - `GOOGLE_APPLICATION_CREDENTIALS` (optional locally; use Workload Identity on Cloud Run)
 - `CDN_BASE_URL` (use the GCS public URL or a CDN in front of the bucket)
@@ -88,10 +94,12 @@ curl -X POST http://localhost:8000/v1/qr_code \
   -d '{"url":"https://ex.com"}'
 ```
 
-Get QR code image (query params) or via body `{ "image_spec": { ... } }`:
+Get QR code image (query params) or via body `{ "image_spec": { ... } }`.
+Add `raw=true` to return the PNG directly:
 
 ```bash
 curl "http://localhost:8000/v1/qr_code_image/ABC123?dimension=256&color=%23000000&border=4"
+curl "http://localhost:8000/v1/qr_code_image/ABC123?dimension=256&color=%23000000&border=4&raw=true"
 ```
 
 Get or manage a QR code:

@@ -12,6 +12,10 @@ def spec_hash(spec: dict) -> str:
     return hashlib.sha256(payload).hexdigest()[:16]
 
 
+def image_object_name(qr_token: str, hash_value: str) -> str:
+    return f"qr/{qr_token}/{hash_value}.png"
+
+
 def image_path(storage_path: Path, qr_token: str, hash_value: str) -> Path:
     return storage_path / "qr" / qr_token / f"{hash_value}.png"
 
@@ -22,4 +26,4 @@ def store_image(image, path: Path) -> None:
 
 
 def build_cdn_url(base_url: str, qr_token: str, hash_value: str) -> str:
-    return f"{base_url.rstrip('/')}/qr/{qr_token}/{hash_value}.png"
+    return f"{base_url.rstrip('/')}/{image_object_name(qr_token, hash_value)}"

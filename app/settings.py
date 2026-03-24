@@ -9,6 +9,8 @@ class Settings:
     database_url: Optional[str]
     db_path: Path
     storage_path: Path
+    gcp_project_id: Optional[str]
+    gcp_bucket_name: Optional[str]
     cdn_base_url: str
     public_base_url: str
     token_secret: str
@@ -25,11 +27,25 @@ def load_settings() -> Settings:
     database_url = os.getenv("DATABASE_URL")
     if database_url == "":
         database_url = None
+    gcp_project_id = os.getenv("GCP_PROJECT_ID")
+    if gcp_project_id == "":
+        gcp_project_id = None
+    gcp_bucket_name = os.getenv("GCP_BUCKET_NAME")
+    if gcp_bucket_name == "":
+        gcp_bucket_name = None
+    cdn_base_url = os.getenv("CDN_BASE_URL")
+    if not cdn_base_url:
+        if gcp_bucket_name:
+            cdn_base_url = f"https://storage.googleapis.com/{gcp_bucket_name}"
+        else:
+            cdn_base_url = "http://localhost:8000/static"
     return Settings(
         database_url=database_url,
         db_path=Path(os.getenv("DB_PATH", "data/qr_codes.db")),
         storage_path=Path(os.getenv("STORAGE_PATH", "storage")),
-        cdn_base_url=os.getenv("CDN_BASE_URL", "http://localhost:8000/static"),
+        gcp_project_id=gcp_project_id,
+        gcp_bucket_name=gcp_bucket_name,
+        cdn_base_url=cdn_base_url,
         public_base_url=os.getenv("PUBLIC_BASE_URL", "http://localhost:8000"),
         token_secret=os.getenv("TOKEN_SECRET", "dev-secret"),
         token_length=int(os.getenv("TOKEN_LENGTH", "10")),

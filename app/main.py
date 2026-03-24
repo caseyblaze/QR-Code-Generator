@@ -6,11 +6,12 @@ from typing import Optional
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, Response
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
-from fastapi.responses import RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from .cache import TTLCache
 from .db import db_connection, db_execute, db_fetchone, init_db, is_duplicate_error
+from .gcs import blob_exists, download_blob_bytes, upload_path
 from .qr import generate_qr_png
 from .schemas import (
     CreateQrRequest,
@@ -20,7 +21,14 @@ from .schemas import (
     UrlResponse,
 )
 from .settings import SETTINGS
-from .storage import build_cdn_url, image_path, normalize_spec, spec_hash, store_image
+from .storage import (
+    build_cdn_url,
+    image_object_name,
+    image_path,
+    normalize_spec,
+    spec_hash,
+    store_image,
+)
 from .tokens import generate_token
 
 
@@ -113,10 +121,12 @@ def create_qr_code(request: CreateQrRequest) -> CreateQrResponse:
     raise HTTPException(status_code=500, detail="Failed to generate unique token")
 
 
-@app.get("/v1/qr_code_image/{qr_token}")
+@app.get("/v1/qr_code_image/{qr_token}", response_model=None)
 def get_qr_code_image(
-    qr_token: str, spec: ImageSpec = Depends(resolve_image_spec)
-) -> dict:
+    qr_token: str,
+    spec: ImageSpec = Depends(resolve_image_spec),
+    raw: bool = Query(False),
+):
     with db_connection() as conn:
         record = get_active_record(conn, qr_token)
         if record is None:
@@ -125,17 +135,38 @@ def get_qr_code_image(
     spec_dict = normalize_spec(spec.dimension, spec.color, spec.border)
     hash_value = spec_hash(spec_dict)
     path = image_path(SETTINGS.storage_path, qr_token, hash_value)
+    object_name = image_object_name(qr_token, hash_value)
 
-    if not path.exists():
-        redirect_url = f"{SETTINGS.public_base_url.rstrip('/')}/{qr_token}"
-        try:
-            image = generate_qr_png(
-                redirect_url, spec.dimension, spec.color, spec.border
+    if path.exists():
+        if raw:
+            return FileResponse(path, media_type="image/png")
+        return {
+            "image_location": build_cdn_url(
+                SETTINGS.cdn_base_url, qr_token, hash_value
             )
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        store_image(image, path)
+        }
 
+    if SETTINGS.gcp_bucket_name and blob_exists(SETTINGS.gcp_bucket_name, object_name):
+        if raw:
+            content = download_blob_bytes(SETTINGS.gcp_bucket_name, object_name)
+            return Response(content=content, media_type="image/png")
+        return {
+            "image_location": build_cdn_url(
+                SETTINGS.cdn_base_url, qr_token, hash_value
+            )
+        }
+
+    redirect_url = f"{SETTINGS.public_base_url.rstrip('/')}/{qr_token}"
+    try:
+        image = generate_qr_png(redirect_url, spec.dimension, spec.color, spec.border)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    store_image(image, path)
+    if SETTINGS.gcp_bucket_name:
+        upload_path(SETTINGS.gcp_bucket_name, object_name, path)
+
+    if raw:
+        return FileResponse(path, media_type="image/png")
     return {
         "image_location": build_cdn_url(SETTINGS.cdn_base_url, qr_token, hash_value)
     }
