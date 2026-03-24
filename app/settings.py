@@ -1,10 +1,12 @@
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 import os
 
 
 @dataclass(frozen=True)
 class Settings:
+    database_url: Optional[str]
     db_path: Path
     storage_path: Path
     cdn_base_url: str
@@ -20,7 +22,11 @@ class Settings:
 
 
 def load_settings() -> Settings:
+    database_url = os.getenv("DATABASE_URL")
+    if database_url == "":
+        database_url = None
     return Settings(
+        database_url=database_url,
         db_path=Path(os.getenv("DB_PATH", "data/qr_codes.db")),
         storage_path=Path(os.getenv("STORAGE_PATH", "storage")),
         cdn_base_url=os.getenv("CDN_BASE_URL", "http://localhost:8000/static"),

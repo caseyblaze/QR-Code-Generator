@@ -1,4 +1,3 @@
-import sqlite3
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -11,7 +10,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from .cache import TTLCache
-from .db import db_connection, init_db
+from .db import db_connection, db_execute, db_fetchone, init_db, is_duplicate_error
 from .qr import generate_qr_png
 from .schemas import (
     CreateQrRequest,
@@ -23,6 +22,7 @@ from .schemas import (
 from .settings import SETTINGS
 from .storage import build_cdn_url, image_path, normalize_spec, spec_hash, store_image
 from .tokens import generate_token
+
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -48,9 +48,11 @@ def now_iso() -> str:
 
 
 def get_active_record(conn, qr_token: str):
-    return conn.execute(
-        "SELECT * FROM qr_codes WHERE qr_token = ? AND status = 'active'", (qr_token,)
-    ).fetchone()
+    return db_fetchone(
+        conn,
+        "SELECT * FROM qr_codes WHERE qr_token = ? AND status = 'active'",
+        (qr_token,),
+    )
 
 
 def resolve_image_spec(
@@ -64,9 +66,9 @@ def resolve_image_spec(
     else:
         try:
             spec = ImageSpec(
-                dimension=dimension
-                if dimension is not None
-                else SETTINGS.default_dimension,
+                dimension=(
+                    dimension if dimension is not None else SETTINGS.default_dimension
+                ),
                 color=color if color is not None else SETTINGS.default_color,
                 border=border if border is not None else SETTINGS.default_border,
             )
@@ -90,7 +92,8 @@ def create_qr_code(request: CreateQrRequest) -> CreateQrResponse:
                 request.url, SETTINGS.token_secret, SETTINGS.token_length
             )
             try:
-                conn.execute(
+                db_execute(
+                    conn,
                     """
                     INSERT INTO qr_codes
                         (id, qr_token, url, status, created_at, updated_at)
@@ -102,8 +105,8 @@ def create_qr_code(request: CreateQrRequest) -> CreateQrResponse:
                 conn.commit()
                 cache.set(qr_token, request.url)
                 return CreateQrResponse(qr_token=qr_token)
-            except sqlite3.IntegrityError as exc:
-                if "UNIQUE" in str(exc).upper():
+            except Exception as exc:
+                if is_duplicate_error(exc):
                     continue
                 raise
 
@@ -133,7 +136,9 @@ def get_qr_code_image(
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         store_image(image, path)
 
-    return {"image_location": build_cdn_url(SETTINGS.cdn_base_url, qr_token, hash_value)}
+    return {
+        "image_location": build_cdn_url(SETTINGS.cdn_base_url, qr_token, hash_value)
+    }
 
 
 @app.get("/v1/qr_code/{qr_token}", response_model=UrlResponse)
@@ -149,7 +154,8 @@ def get_qr_code(qr_token: str) -> UrlResponse:
 def update_qr_code(qr_token: str, request: UpdateQrRequest) -> Response:
     updated_at = now_iso()
     with db_connection() as conn:
-        cursor = conn.execute(
+        cursor = db_execute(
+            conn,
             """
             UPDATE qr_codes
             SET url = ?, updated_at = ?
@@ -170,7 +176,8 @@ def update_qr_code(qr_token: str, request: UpdateQrRequest) -> Response:
 def delete_qr_code(qr_token: str) -> Response:
     deleted_at = now_iso()
     with db_connection() as conn:
-        cursor = conn.execute(
+        cursor = db_execute(
+            conn,
             """
             UPDATE qr_codes
             SET status = 'deleted', deleted_at = ?, updated_at = ?
@@ -200,7 +207,8 @@ def redirect_to_url(qr_token: str):
             url = record["url"]
             cache.set(qr_token, url)
 
-        cursor = conn.execute(
+        cursor = db_execute(
+            conn,
             """
             UPDATE qr_codes
             SET last_clicked_at = ?, updated_at = ?

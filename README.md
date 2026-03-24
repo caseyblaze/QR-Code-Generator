@@ -2,6 +2,14 @@
 
 A simple QR Code Generator service built with FastAPI.
 
+## Architecture
+
+![Architecture Diagram](docs/architecture.png)
+
+## Interaction Flow
+
+![Interaction Flow Diagram](docs/flow.png)
+
 ## Quickstart
 
 ```bash
@@ -19,6 +27,11 @@ python3 -m pytest
 
 ## Environment
 
+- `DATABASE_URL` (optional; when set uses MySQL instead of SQLite)
+  - Cloud SQL unix socket example:
+    `mysql+pymysql://USER:PASSWORD@/DB_NAME?unix_socket=/cloudsql/PROJECT:REGION:INSTANCE`
+  - TCP example:
+    `mysql+pymysql://USER:PASSWORD@127.0.0.1:3306/DB_NAME`
 - `DB_PATH` (default: `data/qr_codes.db`)
 - `STORAGE_PATH` (default: `storage`)
 - `CDN_BASE_URL` (default: `http://localhost:8000/static`)
