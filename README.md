@@ -318,10 +318,12 @@ gcloud run deploy qr-generator \
   --platform managed \
   --region asia-east1 \
   --allow-unauthenticated \
-  --set-env-vars="GCP_PROJECT_ID=YOUR_PROJECT_ID,GCP_BUCKET_NAME=YOUR_BUCKET_NAME,PUBLIC_BASE_URL=https://YOUR_SERVICE_URL"
+  --add-cloudsql-instances=YOUR_PROJECT_ID:asia-east1:YOUR_INSTANCE_ID \
+  --set-env-vars="GCP_PROJECT_ID=YOUR_PROJECT_ID,GCP_BUCKET_NAME=YOUR_BUCKET_NAME,PUBLIC_BASE_URL=https://YOUR_SERVICE_URL,DATABASE_URL=mysql+pymysql://DB_USER:DB_PASS@/DB_NAME?unix_socket=/cloudsql/YOUR_PROJECT_ID:asia-east1:YOUR_INSTANCE_ID"
 ```
 
 On Cloud Run, authentication to GCS uses Workload Identity — no `GOOGLE_APPLICATION_CREDENTIALS` needed.
+Omit `--add-cloudsql-instances` and `DATABASE_URL` to fall back to SQLite on ephemeral local disk (development/demo only).
 
 ---
 

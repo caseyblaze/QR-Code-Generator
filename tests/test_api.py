@@ -81,6 +81,48 @@ def test_update_and_delete_qr_code(client):
     assert missing_response.status_code == 404
 
 
+def test_patch_only_expires_at(client):
+    test_client, _, _ = client
+    response = test_client.post("/api/qr/create", json={"url": "https://ex.com"})
+    token = response.json()["token"]
+
+    patch_response = test_client.patch(
+        f"/api/qr/{token}", json={"expires_at": "2099-01-01T00:00:00Z"}
+    )
+    assert patch_response.status_code == 204
+
+    get_response = test_client.get(f"/api/qr/{token}")
+    assert get_response.status_code == 200
+    assert get_response.json()["url"] == "https://ex.com"
+
+
+def test_patch_clear_expires_at(client):
+    test_client, _, _ = client
+    response = test_client.post(
+        "/api/qr/create",
+        json={"url": "https://ex.com", "expires_at": "2000-01-01T00:00:00Z"},
+    )
+    token = response.json()["token"]
+
+    redirect = test_client.get(f"/r/{token}", follow_redirects=False)
+    assert redirect.status_code == 410
+
+    patch_response = test_client.patch(f"/api/qr/{token}", json={"expires_at": None})
+    assert patch_response.status_code == 204
+
+    redirect = test_client.get(f"/r/{token}", follow_redirects=False)
+    assert redirect.status_code == 302
+
+
+def test_patch_requires_at_least_one_field(client):
+    test_client, _, _ = client
+    response = test_client.post("/api/qr/create", json={"url": "https://ex.com"})
+    token = response.json()["token"]
+
+    patch_response = test_client.patch(f"/api/qr/{token}", json={})
+    assert patch_response.status_code == 422
+
+
 def test_redirect(client):
     test_client, _, _ = client
     response = test_client.post("/api/qr/create", json={"url": "https://ex.com"})

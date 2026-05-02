@@ -61,13 +61,26 @@ def _is_expired(expires_at) -> bool:
     if expires_at is None:
         return False
     if isinstance(expires_at, str):
-        return expires_at < now_iso()
-    # datetime object returned by MySQL
-    return expires_at.replace(tzinfo=timezone.utc) < datetime.now(timezone.utc)
+        try:
+            dt = datetime.fromisoformat(expires_at)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt < datetime.now(timezone.utc)
+        except ValueError:
+            return False
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    return expires_at < datetime.now(timezone.utc)
 
 
 def _expires_at_str(expires_at: Optional[datetime]) -> Optional[str]:
-    return expires_at.isoformat() if expires_at else None
+    if not expires_at:
+        return None
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    else:
+        expires_at = expires_at.astimezone(timezone.utc)
+    return expires_at.isoformat()
 
 
 def get_active_record(conn, qr_token: str):
@@ -110,7 +123,7 @@ def record_scan(qr_token: str) -> None:
     scan_date = datetime.now(timezone.utc).date().isoformat()
     ts = now_iso()
     with db_connection() as conn:
-        db_execute(
+        cursor = db_execute(
             conn,
             """
             UPDATE qr_codes
@@ -119,7 +132,8 @@ def record_scan(qr_token: str) -> None:
             """,
             (ts, ts, qr_token),
         )
-        upsert_scan(conn, qr_token, scan_date)
+        if cursor.rowcount > 0:
+            upsert_scan(conn, qr_token, scan_date)
         conn.commit()
 
 
@@ -205,34 +219,26 @@ def get_qr_code(qr_token: str) -> UrlResponse:
 
 @app.patch("/api/qr/{qr_token}")
 def update_qr_code(qr_token: str, request: UpdateQrRequest) -> Response:
-    updated_at = now_iso()
+    set_parts = ["updated_at = ?"]
+    params: list = [now_iso()]
+    if "url" in request.model_fields_set:
+        set_parts.append("url = ?")
+        params.append(request.url)
+    if "expires_at" in request.model_fields_set:
+        set_parts.append("expires_at = ?")
+        params.append(_expires_at_str(request.expires_at))
+    params.append(qr_token)
     with db_connection() as conn:
-        if request.expires_at is not None:
-            cursor = db_execute(
-                conn,
-                """
-                UPDATE qr_codes
-                SET url = ?, updated_at = ?, expires_at = ?
-                WHERE qr_token = ? AND status = 'active'
-                """,
-                (request.url, updated_at, _expires_at_str(request.expires_at), qr_token),
-            )
-        else:
-            cursor = db_execute(
-                conn,
-                """
-                UPDATE qr_codes
-                SET url = ?, updated_at = ?
-                WHERE qr_token = ? AND status = 'active'
-                """,
-                (request.url, updated_at, qr_token),
-            )
+        cursor = db_execute(
+            conn,
+            f"UPDATE qr_codes SET {', '.join(set_parts)} WHERE qr_token = ? AND status = 'active'",
+            tuple(params),
+        )
         conn.commit()
 
     if cursor.rowcount == 0:
         raise HTTPException(status_code=404, detail="QR code not found")
 
-    # Invalidate cache; next redirect will repopulate from DB with correct expires_at
     cache.delete(qr_token)
     return Response(status_code=204)
 

@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Optional
 from urllib.parse import urlparse, urlunparse
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 _PRIVATE_NETWORKS = [
     ipaddress.ip_network("10.0.0.0/8"),
@@ -46,11 +46,20 @@ def validate_url(value: str) -> str:
     if _is_private_host(hostname):
         raise ValueError("url must not point to a private or reserved address")
 
-    # Normalize: lowercase scheme and host, strip default port
+    # Normalize: lowercase scheme and host, strip default port, preserve userinfo/IPv6
     scheme = parsed.scheme.lower()
-    netloc = hostname.lower()
+    host = hostname.lower()
+    if ":" in host:  # IPv6 literal needs brackets
+        host = f"[{host}]"
     if parsed.port and parsed.port != _DEFAULT_PORTS.get(scheme):
-        netloc = f"{netloc}:{parsed.port}"
+        host = f"{host}:{parsed.port}"
+    if parsed.username:
+        userinfo = parsed.username
+        if parsed.password:
+            userinfo = f"{userinfo}:{parsed.password}"
+        netloc = f"{userinfo}@{host}"
+    else:
+        netloc = host
 
     return urlunparse(parsed._replace(scheme=scheme, netloc=netloc))
 
@@ -66,13 +75,19 @@ class CreateQrRequest(BaseModel):
 
 
 class UpdateQrRequest(BaseModel):
-    url: str
+    url: Optional[str] = None
     expires_at: Optional[datetime] = None
+
+    @model_validator(mode="after")
+    def at_least_one_field(self):
+        if "url" not in self.model_fields_set and "expires_at" not in self.model_fields_set:
+            raise ValueError("at least one of url or expires_at must be provided")
+        return self
 
     @field_validator("url")
     @classmethod
-    def validate_url_field(cls, value: str) -> str:
-        return validate_url(value)
+    def validate_url_field(cls, value: Optional[str]) -> Optional[str]:
+        return validate_url(value) if value is not None else None
 
 
 class CreateQrResponse(BaseModel):
