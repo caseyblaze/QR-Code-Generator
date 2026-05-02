@@ -200,3 +200,64 @@ def test_private_ip_blocked(client):
     for url in ["http://localhost/test", "http://127.0.0.1/", "http://192.168.1.1/"]:
         response = test_client.post("/api/qr/create", json={"url": url})
         assert response.status_code == 422, f"Expected 422 for {url}"
+
+
+def test_verification_flow(client):
+    test_client, _, _ = client
+
+    # 1. Create a QR code → 200, returns expected fields
+    resp = test_client.post("/api/qr/create", json={"url": "https://example.com"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert {"token", "short_url", "qr_code_url", "original_url"} <= body.keys()
+    assert body["original_url"] == "https://example.com"
+    token = body["token"]
+    assert body["short_url"].endswith(f"/r/{token}")
+    assert body["qr_code_url"].endswith(f"/api/qr/{token}/image")
+
+    # 2. Redirect → 302
+    resp = test_client.get(f"/r/{token}", follow_redirects=False)
+    assert resp.status_code == 302
+
+    # 3. Get info → 200, returns token metadata
+    resp = test_client.get(f"/api/qr/{token}")
+    assert resp.status_code == 200
+    assert resp.json()["url"] == "https://example.com"
+
+    # 4. Update target URL → 200/204
+    resp = test_client.patch(f"/api/qr/{token}", json={"url": "https://new-url.com"})
+    assert resp.status_code in (200, 204)
+
+    # 5. Redirect now goes to new URL
+    resp = test_client.get(f"/r/{token}", follow_redirects=False)
+    assert resp.status_code == 302
+    assert resp.headers["location"] == "https://new-url.com"
+
+    # 6. Delete → 200/204
+    resp = test_client.delete(f"/api/qr/{token}")
+    assert resp.status_code in (200, 204)
+
+    # 7. Redirect after delete → 410
+    resp = test_client.get(f"/r/{token}", follow_redirects=False)
+    assert resp.status_code == 410
+
+    # 8. Non-existent token → 404
+    resp = test_client.get("/r/INVALID", follow_redirects=False)
+    assert resp.status_code == 404
+
+    # 9. QR code image → 200 image/png
+    resp2 = test_client.post("/api/qr/create", json={"url": "https://example.com"})
+    token2 = resp2.json()["token"]
+    resp = test_client.get(f"/api/qr/{token2}/image")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("image/png")
+
+    # 10. Analytics → 200, returns expected shape
+    resp = test_client.get(f"/api/qr/{token2}/analytics")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["token"] == token2
+    assert "total_scans" in body
+    assert "scans_by_day" in body
+    assert isinstance(body["total_scans"], int)
+    assert isinstance(body["scans_by_day"], list)
