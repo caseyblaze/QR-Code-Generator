@@ -208,3 +208,7 @@ __marimo__/
 
 # Other files to ignore
 QR Code Generator.pdf
+
+# Runtime data
+data/*.db
+storage/

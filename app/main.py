@@ -3,20 +3,22 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import Body, Depends, FastAPI, HTTPException, Query, Response
+from fastapi import BackgroundTasks, Body, Depends, FastAPI, HTTPException, Query, Response
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from .cache import TTLCache
-from .db import db_connection, db_execute, db_fetchone, init_db, is_duplicate_error
+from .db import db_connection, db_execute, db_fetchone, init_db, is_duplicate_error, upsert_scan
 from .gcs import blob_exists, download_blob_bytes, upload_path
 from .qr import generate_qr_png
 from .schemas import (
+    AnalyticsResponse,
     CreateQrRequest,
     CreateQrResponse,
     ImageSpec,
+    ScansByDay,
     UpdateQrRequest,
     UrlResponse,
 )
@@ -55,6 +57,32 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _is_expired(expires_at) -> bool:
+    if expires_at is None:
+        return False
+    if isinstance(expires_at, str):
+        try:
+            dt = datetime.fromisoformat(expires_at)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt < datetime.now(timezone.utc)
+        except ValueError:
+            return False
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    return expires_at < datetime.now(timezone.utc)
+
+
+def _expires_at_str(expires_at: Optional[datetime]) -> Optional[str]:
+    if not expires_at:
+        return None
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    else:
+        expires_at = expires_at.astimezone(timezone.utc)
+    return expires_at.isoformat()
+
+
 def get_active_record(conn, qr_token: str):
     return db_fetchone(
         conn,
@@ -91,9 +119,28 @@ def resolve_image_spec(
     return spec
 
 
-@app.post("/v1/qr_code", response_model=CreateQrResponse)
+def record_scan(qr_token: str) -> None:
+    scan_date = datetime.now(timezone.utc).date().isoformat()
+    ts = now_iso()
+    with db_connection() as conn:
+        cursor = db_execute(
+            conn,
+            """
+            UPDATE qr_codes
+            SET scan_count = scan_count + 1, last_clicked_at = ?, updated_at = ?
+            WHERE qr_token = ? AND status = 'active'
+            """,
+            (ts, ts, qr_token),
+        )
+        if cursor.rowcount > 0:
+            upsert_scan(conn, qr_token, scan_date)
+        conn.commit()
+
+
+@app.post("/api/qr/create", response_model=CreateQrResponse)
 def create_qr_code(request: CreateQrRequest) -> CreateQrResponse:
     created_at = now_iso()
+    expires_at = _expires_at_str(request.expires_at)
     with db_connection() as conn:
         for _ in range(10):
             qr_token = generate_token(
@@ -104,15 +151,21 @@ def create_qr_code(request: CreateQrRequest) -> CreateQrResponse:
                     conn,
                     """
                     INSERT INTO qr_codes
-                        (id, qr_token, url, status, created_at, updated_at)
+                        (id, qr_token, url, status, created_at, updated_at, expires_at)
                     VALUES
-                        (?, ?, ?, 'active', ?, ?)
+                        (?, ?, ?, 'active', ?, ?, ?)
                     """,
-                    (str(uuid.uuid4()), qr_token, request.url, created_at, created_at),
+                    (str(uuid.uuid4()), qr_token, request.url, created_at, created_at, expires_at),
                 )
                 conn.commit()
-                cache.set(qr_token, request.url)
-                return CreateQrResponse(qr_token=qr_token)
+                cache.set(qr_token, {"url": request.url, "expires_at": expires_at})
+                base = SETTINGS.public_base_url.rstrip("/")
+                return CreateQrResponse(
+                    token=qr_token,
+                    short_url=f"{base}/r/{qr_token}",
+                    qr_code_url=f"{base}/api/qr/{qr_token}/image",
+                    original_url=request.url,
+                )
             except Exception as exc:
                 if is_duplicate_error(exc):
                     continue
@@ -121,11 +174,10 @@ def create_qr_code(request: CreateQrRequest) -> CreateQrResponse:
     raise HTTPException(status_code=500, detail="Failed to generate unique token")
 
 
-@app.get("/v1/qr_code_image/{qr_token}", response_model=None)
+@app.get("/api/qr/{qr_token}/image", response_model=None)
 def get_qr_code_image(
     qr_token: str,
     spec: ImageSpec = Depends(resolve_image_spec),
-    raw: bool = Query(False),
 ):
     with db_connection() as conn:
         record = get_active_record(conn, qr_token)
@@ -138,25 +190,13 @@ def get_qr_code_image(
     object_name = image_object_name(qr_token, hash_value)
 
     if path.exists():
-        if raw:
-            return FileResponse(path, media_type="image/png")
-        return {
-            "image_location": build_cdn_url(
-                SETTINGS.cdn_base_url, qr_token, hash_value
-            )
-        }
+        return FileResponse(path, media_type="image/png")
 
     if SETTINGS.gcp_bucket_name and blob_exists(SETTINGS.gcp_bucket_name, object_name):
-        if raw:
-            content = download_blob_bytes(SETTINGS.gcp_bucket_name, object_name)
-            return Response(content=content, media_type="image/png")
-        return {
-            "image_location": build_cdn_url(
-                SETTINGS.cdn_base_url, qr_token, hash_value
-            )
-        }
+        content = download_blob_bytes(SETTINGS.gcp_bucket_name, object_name)
+        return Response(content=content, media_type="image/png")
 
-    redirect_url = f"{SETTINGS.public_base_url.rstrip('/')}/{qr_token}"
+    redirect_url = f"{SETTINGS.public_base_url.rstrip('/')}/r/{qr_token}"
     try:
         image = generate_qr_png(redirect_url, spec.dimension, spec.color, spec.border)
     except ValueError as exc:
@@ -165,14 +205,10 @@ def get_qr_code_image(
     if SETTINGS.gcp_bucket_name:
         upload_path(SETTINGS.gcp_bucket_name, object_name, path)
 
-    if raw:
-        return FileResponse(path, media_type="image/png")
-    return {
-        "image_location": build_cdn_url(SETTINGS.cdn_base_url, qr_token, hash_value)
-    }
+    return FileResponse(path, media_type="image/png")
 
 
-@app.get("/v1/qr_code/{qr_token}", response_model=UrlResponse)
+@app.get("/api/qr/{qr_token}", response_model=UrlResponse)
 def get_qr_code(qr_token: str) -> UrlResponse:
     with db_connection() as conn:
         record = get_active_record(conn, qr_token)
@@ -181,29 +217,33 @@ def get_qr_code(qr_token: str) -> UrlResponse:
         return UrlResponse(url=record["url"])
 
 
-@app.put("/v1/qr_code/{qr_token}")
+@app.patch("/api/qr/{qr_token}")
 def update_qr_code(qr_token: str, request: UpdateQrRequest) -> Response:
-    updated_at = now_iso()
+    set_parts = ["updated_at = ?"]
+    params: list = [now_iso()]
+    if "url" in request.model_fields_set:
+        set_parts.append("url = ?")
+        params.append(request.url)
+    if "expires_at" in request.model_fields_set:
+        set_parts.append("expires_at = ?")
+        params.append(_expires_at_str(request.expires_at))
+    params.append(qr_token)
     with db_connection() as conn:
         cursor = db_execute(
             conn,
-            """
-            UPDATE qr_codes
-            SET url = ?, updated_at = ?
-            WHERE qr_token = ? AND status = 'active'
-            """,
-            (request.url, updated_at, qr_token),
+            f"UPDATE qr_codes SET {', '.join(set_parts)} WHERE qr_token = ? AND status = 'active'",
+            tuple(params),
         )
         conn.commit()
 
     if cursor.rowcount == 0:
         raise HTTPException(status_code=404, detail="QR code not found")
 
-    cache.set(qr_token, request.url)
+    cache.delete(qr_token)
     return Response(status_code=204)
 
 
-@app.delete("/v1/qr_code/{qr_token}")
+@app.delete("/api/qr/{qr_token}")
 def delete_qr_code(qr_token: str) -> Response:
     deleted_at = now_iso()
     with db_connection() as conn:
@@ -225,32 +265,59 @@ def delete_qr_code(qr_token: str) -> Response:
     return Response(status_code=204)
 
 
-@app.get("/{qr_token}")
-def redirect_to_url(qr_token: str):
-    url = cache.get(qr_token)
-    updated_at = now_iso()
+@app.get("/api/qr/{qr_token}/analytics", response_model=AnalyticsResponse)
+def get_analytics(qr_token: str) -> AnalyticsResponse:
+    with db_connection() as conn:
+        record = db_fetchone(
+            conn,
+            "SELECT scan_count FROM qr_codes WHERE qr_token = ? AND status = 'active'",
+            (qr_token,),
+        )
+        if record is None:
+            raise HTTPException(status_code=404, detail="QR code not found")
+
+        scans_cursor = db_execute(
+            conn,
+            "SELECT scan_date, count FROM qr_scans WHERE qr_token = ? ORDER BY scan_date",
+            (qr_token,),
+        )
+        scans_rows = scans_cursor.fetchall()
+
+    scans_by_day = [ScansByDay(date=row["scan_date"], count=row["count"]) for row in scans_rows]
+    return AnalyticsResponse(
+        token=qr_token,
+        total_scans=record["scan_count"],
+        scans_by_day=scans_by_day,
+    )
+
+
+@app.get("/r/{qr_token}")
+def redirect_to_url(qr_token: str, background_tasks: BackgroundTasks):
+    cached = cache.get(qr_token)
+    if cached is not None:
+        if _is_expired(cached.get("expires_at")):
+            cache.delete(qr_token)
+            raise HTTPException(status_code=410, detail="QR code has expired")
+        background_tasks.add_task(record_scan, qr_token)
+        return RedirectResponse(url=cached["url"], status_code=302)
 
     with db_connection() as conn:
-        if url is None:
-            record = get_active_record(conn, qr_token)
-            if record is None:
-                raise HTTPException(status_code=404, detail="QR code not found")
-            url = record["url"]
-            cache.set(qr_token, url)
-
-        cursor = db_execute(
+        record = db_fetchone(
             conn,
-            """
-            UPDATE qr_codes
-            SET last_clicked_at = ?, updated_at = ?
-            WHERE qr_token = ? AND status = 'active'
-            """,
-            (updated_at, updated_at, qr_token),
+            "SELECT qr_token, url, status, expires_at FROM qr_codes WHERE qr_token = ?",
+            (qr_token,),
         )
-        conn.commit()
 
-    if cursor.rowcount == 0:
-        cache.delete(qr_token)
+    if record is None:
         raise HTTPException(status_code=404, detail="QR code not found")
+    if record["status"] == "deleted":
+        raise HTTPException(status_code=410, detail="QR code has been deleted")
+    if _is_expired(record["expires_at"]):
+        raise HTTPException(status_code=410, detail="QR code has expired")
 
-    return RedirectResponse(url=url, status_code=302)
+    ea = record["expires_at"]
+    if isinstance(ea, datetime):
+        ea = ea.isoformat()
+    cache.set(qr_token, {"url": record["url"], "expires_at": ea})
+    background_tasks.add_task(record_scan, qr_token)
+    return RedirectResponse(url=record["url"], status_code=302)

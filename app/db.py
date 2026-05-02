@@ -57,10 +57,31 @@ def _init_sqlite() -> None:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 last_clicked_at TEXT,
-                deleted_at TEXT
+                deleted_at TEXT,
+                expires_at TEXT,
+                scan_count INTEGER NOT NULL DEFAULT 0
             );
             """
         )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS qr_scans (
+                qr_token TEXT NOT NULL,
+                scan_date TEXT NOT NULL,
+                count INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (qr_token, scan_date)
+            );
+            """
+        )
+        # Migration: add new columns to existing databases
+        for ddl in (
+            "ALTER TABLE qr_codes ADD COLUMN expires_at TEXT",
+            "ALTER TABLE qr_codes ADD COLUMN scan_count INTEGER NOT NULL DEFAULT 0",
+        ):
+            try:
+                cursor.execute(ddl)
+            except sqlite3.OperationalError:
+                pass  # Column already exists
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_qr_codes_token ON qr_codes(qr_token);"
         )
@@ -83,10 +104,34 @@ def _init_mysql() -> None:
                 created_at TIMESTAMP NOT NULL,
                 updated_at TIMESTAMP NOT NULL,
                 last_clicked_at TIMESTAMP,
-                deleted_at TIMESTAMP
+                deleted_at TIMESTAMP,
+                expires_at TIMESTAMP NULL,
+                scan_count INT NOT NULL DEFAULT 0
             ) CHARACTER SET utf8mb4;
             """
         )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS qr_scans (
+                qr_token VARCHAR(32) NOT NULL,
+                scan_date DATE NOT NULL,
+                count INT NOT NULL DEFAULT 0,
+                PRIMARY KEY (qr_token, scan_date)
+            ) CHARACTER SET utf8mb4;
+            """
+        )
+        # Migration: add new columns to existing databases
+        for ddl in (
+            "ALTER TABLE qr_codes ADD COLUMN expires_at TIMESTAMP NULL",
+            "ALTER TABLE qr_codes ADD COLUMN scan_count INT NOT NULL DEFAULT 0",
+        ):
+            try:
+                cursor.execute(ddl)
+            except pymysql.err.OperationalError as exc:
+                if bool(exc.args) and exc.args[0] == 1060:  # Duplicate column name
+                    pass
+                else:
+                    raise
         _ensure_mysql_index(cursor, "qr_codes", "idx_qr_codes_token", "qr_token")
         _ensure_mysql_index(
             cursor, "qr_codes", "idx_qr_codes_last_clicked", "last_clicked_at"
@@ -145,6 +190,23 @@ def db_execute(conn, query: str, params: Optional[tuple] = None):
 def db_fetchone(conn, query: str, params: Optional[tuple] = None):
     cursor = db_execute(conn, query, params)
     return cursor.fetchone()
+
+
+def upsert_scan(conn, qr_token: str, scan_date: str) -> None:
+    if _using_mysql():
+        db_execute(
+            conn,
+            "INSERT INTO qr_scans (qr_token, scan_date, count) VALUES (?, ?, 1)"
+            " ON DUPLICATE KEY UPDATE count = count + 1",
+            (qr_token, scan_date),
+        )
+    else:
+        db_execute(
+            conn,
+            "INSERT INTO qr_scans (qr_token, scan_date, count) VALUES (?, ?, 1)"
+            " ON CONFLICT (qr_token, scan_date) DO UPDATE SET count = count + 1",
+            (qr_token, scan_date),
+        )
 
 
 def is_duplicate_error(exc: Exception) -> bool:
